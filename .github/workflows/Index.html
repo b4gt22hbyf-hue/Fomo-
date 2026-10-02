@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Mobile Solana Sweeper</title>
+  <style>
+    body { font-family: sans-serif; background: #0f172a; color: #fff; padding: 20px; }
+    .card { background: #1e293b; padding: 20px; border-radius: 12px; }
+    input, button { width: 100%; padding: 12px; margin-top: 10px; border-radius: 8px; border: none; font-size: 16px; box-sizing: border-box; }
+    input { background: #0f172a; color: #fff; border: 1px solid #334155; }
+    button { background: #10b981; color: #fff; font-weight: bold; }
+    #status { margin-top: 15px; font-size: 14px; text-align: center; word-break: break-all; }
+  </style>
+  <script src="https://unpkg.com/@solana/web3.js@latest/lib/index.iife.min.js"></script>
+  <script src="https://unpkg.com/@solana/spl-token@latest/lib/index.iife.min.js"></script>
+</head>
+<body>
+<div class="card">
+  <h2 style="text-align:center;">Solana & Memecoin Sweeper</h2>
+  <button id="connectBtn">1. Connect Mobile Wallet</button>
+  <label style="display:block; margin-top:15px;">Main Destination Address:</label>
+  <input type="text" id="destination" placeholder="Paste main wallet address here..." />
+  <button id="sweepBtn" disabled style="margin-top:20px;">2. Sweep All Memecoins & SOL</button>
+  <div id="status"></div>
+</div>
+<script>
+  const connection = new solanaWeb3.Connection("https://api.mainnet-beta.solana.com", "confirmed");
+  let walletPublicKey = null;
+
+  document.getElementById("connectBtn").addEventListener("click", async () => {
+    const provider = window.solana || window.phantom?.solana;
+    if (provider) {
+      try {
+        const resp = await provider.connect();
+        walletPublicKey = resp.publicKey;
+        document.getElementById("connectBtn").innerText = "Connected: " + walletPublicKey.toString().slice(0,4) + "..." + walletPublicKey.toString().slice(-4);
+        document.getElementById("sweepBtn").disabled = false;
+        document.getElementById("status").innerText = "Wallet Connected.";
+      } catch (err) {
+        document.getElementById("status").innerText = "Error: " + err.message;
+      }
+    } else {
+      alert("Please open this link inside the Phantom App browser!");
+    }
+  });
+
+  document.getElementById("sweepBtn").addEventListener("click", async () => {
+    const destStr = document.getElementById("destination").value.trim();
+    if (!destStr) return alert("Enter destination address.");
+    const provider = window.solana || window.phantom?.solana;
+
+    try {
+      document.getElementById("status").innerText = "Fetching token accounts...";
+      const destPubkey = new solanaWeb3.PublicKey(destStr);
+      const tokenAccounts = await connection.getParsedTokenAccountsByOwner(walletPublicKey, { programId: splToken.TOKEN_PROGRAM_ID });
+      const tx = new solanaWeb3.Transaction();
+
+      for (const acc of tokenAccounts.value) {
+        const info = acc.account.data.parsed.info;
+        if (BigInt(info.tokenAmount.amount) > 0n) {
+          const mint = new solanaWeb3.PublicKey(info.mint);
+          const destAta = await splToken.getAssociatedTokenAddress(mint, destPubkey);
+          const destAtaInfo = await connection.getAccountInfo(destAta);
+          
+          if (!destAtaInfo) {
+            tx.add(splToken.createAssociatedTokenAccountInstruction(walletPublicKey, destAta, destPubkey, mint));
+          }
+          tx.add(splToken.createTransferInstruction(acc.pubkey, destAta, walletPublicKey, BigInt(info.tokenAmount.amount)));
+        }
+      }
+
+      const balance = await connection.getBalance(walletPublicKey);
+      if (balance > 15000) {
+        tx.add(solanaWeb3.SystemProgram.transfer({ fromPubkey: walletPublicKey, toPubkey: destPubkey, lamports: balance - 15000 }));
+      }
+
+      tx.feePayer = walletPublicKey;
+      tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
+      
+      document.getElementById("status").innerText = "Approve transaction in wallet...";
+      const { signature } = await provider.signAndSendTransaction(tx);
+      document.getElementById("status").innerText = "Sweep Complete! Tx: " + signature;
+    } catch (e) {
+      document.getElementById("status").innerText = "Error: " + e.message;
+    }
+  });
+</script>
+</body>
+</html>
